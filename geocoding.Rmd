@@ -1,0 +1,380 @@
+---
+title: "Geocoding: OpenStreetMap + R + Tableau"
+subtitle: "Made for RPubs"
+author: "Aviparna Biswas"
+date: "06-10-2020"
+output: 
+  html_notebook: default
+  html_document: default
+---
+
+-------------
+
+## Notebook Instructions
+
+-------------
+
+* In many cases we have access to data with location information e.g. Address, City ,County ,Zip Code , Country. To visualize this data with more detail we need to use geolocation.
+* In order get the actual geolocation coordinates (Longitute,Latitude) for the location data, we need to calculate this coordenates.
+* Using nominatim a free search engine for OpenStreetMap data to easily find out geolocation coordinates.
+
+**OpenStreetMap:** Is open data built by a community of mappers that contribute and maintain data about roads, trails, cafÃ©s, railway stations, and much more, all over the world.
+
+* https://www.openstreetmap.org/about
+
+### Load Packages in R/RStudio 
+
+We are going to use tidyverse a collection of R packages designed for data science. As well as other packages to help with data cleaning and processing. 
+
+* tidyverse: https://www.tidyverse.org/
+* rvest: https://github.com/tidyverse/rvest
+* stringi: https://github.com/gagolews/stringi
+* jsonlite: https://github.com/jeroen/jsonlite
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+options(scipen = 9999)
+
+# Here we are checking if the package is installed
+if(!require("tidyverse")){
+  # If the package is not in the system then it will be install
+  install.packages("tidyverse", dependencies = TRUE)
+  # Here we are loading the package
+  library("tidyverse")
+}
+
+if(!require("rvest")){
+  install.packages("rvest", dependencies = TRUE)
+  library("rvest")
+}
+
+if(!require("stringi")){
+  install.packages("stringi", dependencies = TRUE)
+  library("stringi")
+}
+
+if(!require("lubridate")){
+  install.packages("lubridate", dependencies = TRUE)
+  library("lubridate")
+}
+
+if(!require("jsonlite")){
+  install.packages("jsonlite", dependencies = TRUE)
+  library("jsonlite")
+}
+```
+
+-------------
+
+## Geocoding: OpenStreetMap API Search Functions
+
+-------------
+
+The geocode function below allow us to make requests to Nominatim a search engine for OpenStreetMap data.
+
+* Nominatim: https://nominatim.openstreetmap.org/
+* Resources: https://nominatim.org/release-docs/develop/api/Search
+
+```{r}
+# INPUT LOCATION VARIABLES
+# [RECORD_ID], [ADDRESS], [CITY], [STATE], [ZIPCODE]
+
+
+geocode <- function(record_id, address, city, state, zipcode){
+  
+  # NOMINATIM SEARCH API URL
+  src_url <- "https://nominatim.openstreetmap.org/search?q="
+  
+  ###### INPUTS PREPARATION ##### 
+
+  city <- str_replace_all(string = city, 
+                          pattern = "\\s|,", 
+                          replacement = "+")
+  
+  # CREATE A FULL ADDRESS
+  addr <- paste(address, city, state, zipcode, sep = "%2C")
+  
+  # CREATE A SEARCH URL BASED ON NOMINATIM API TO RETURN GEOJSON
+  requests <- paste0(src_url, addr, "&format=geojson")
+  
+  for (i in 1:length(requests)) {
+    
+    response <- read_html(requests[i]) %>%
+      html_node("p") %>%
+      html_text() %>%
+      fromJSON()
+    
+  # FROM THE RESPONSE EXTRACT LATITUDE AND LONGITUDE COORDINATES
+    lon <- response$features$geometry$coordinates[[1]][1]
+    lat <- response$features$geometry$coordinates[[1]][2]
+    
+    # CREATE A COORDINATES DATAFRAME
+    if(i == 1) {
+      loc <- tibble(record_id = record_id[i], 
+                    address = str_replace_all(addr[i], "%2C", ","),
+                    latitude = lat, longitude = lon)
+    }else{
+      df <- tibble(record_id = record_id[i], 
+                   address = str_replace_all(addr[i], "%2C", ","),
+                   latitude = lat, longitude = lon)
+      loc <- bind_rows(loc, df)
+    }
+  }
+ return(loc)
+    
+}
+
+```
+
+-------------
+
+## Data Source: San Francisco Buildings Permit Data
+
+-------------
+
+This data set pertains to all types of structural permits. Data includes details on application/permit numbers, job addresses, supervisorial districts, and the current status of the applications.
+
+* Source: https://data.sfgov.org/Housing-and-Buildings/Building-Permits/i98e-djp9
+
+```{r}
+
+data <- read.csv("data/building_permits.csv")
+```
+
+### Data Inspection
+
+```{r}
+head(data)
+```
+
+```{r}
+tail(data)
+```
+
+```{r}
+colnames(data)
+```
+```{r}
+length(colnames(data))
+```
+
+### Lets change the name of some columns and remove other that are irrelevant for this use case.
+
+```{r}
+
+colremove = c("First.Construction.Document.Date",
+              "Structural.Notification",
+              "Number.of.Existing.Stories",
+              "Number.of.Proposed.Stories",
+              "Voluntary.Soft.Story.Retrofit",
+              "Fire.Only.Permit","Existing.Units",
+              "Proposed.Units","Plansets",
+              "TIDF.Compliance","Existing.Construction.Type",
+              "Proposed.Construction.Type","Site.Permit",
+              "Supervisor.District","Current.Police.Districts",
+              "Current.Supervisor.Districts",
+              "Current.Status.Date", "Permit.Creation.Date",
+              "Analysis.Neighborhoods","Lot","Location",
+              "SF.Find.Neighborhoods","Unit","Block", "Permit.Type",
+              "Unit.Suffix","Street.Number.Suffix",
+              "Existing.Construction.Type.Description")
+
+data <- data[colnames(data)[1:47]] %>% select(-any_of(colremove))
+```
+
+
+```{r}
+length(colnames(data))
+```
+```{r}
+colnames(data)
+```
+Now, let us rename two of the columns in the dataset:
+```{r}
+
+data <- rename(data, "Neighborhoods Boundaries" = "Neighborhoods...Analysis.Boundaries")
+
+data <- rename(data, "Permit Type" = "Permit.Type.Definition")
+
+```
+
+### Columns to lowercase
+
+```{r}
+
+colnames(data) <- str_replace_all(tolower(colnames(data)), " ","_")
+
+```
+
+Let us see the lowercase column datas:
+```{r}
+colnames(data)
+```
+
+### Dataset Dimensions (num rows x num columns)
+```{r}
+
+dim_desc(data)
+
+```
+
+### Select Current Status
+
+```{r}
+
+bldg_df <- data %>% filter(current.status == "complete")
+
+head(bldg_df)
+
+```
+
+### Data Dimension
+```{r}
+
+dim_desc(bldg_df)
+
+```
+### Data Preparation and Cleaning
+```{r}
+
+bldg_df <- na.omit(bldg_df)
+
+dim_desc(bldg_df)
+
+```
+
+### String Cleaning and Pattern Replacement
+
+```{r}
+
+bldg_df$city <- "San Francisco"
+bldg_df$state <- "CA"
+bldg_df$record_id <- as.character(bldg_df$record.id)
+
+bldg_df$proposed_construction_type_description <-
+  bldg_df$proposed.construction.type.description %>% 
+  str_remove_all(pattern = "\\(|\\)") %>% 
+  str_replace_all(" ", "_") %>% 
+  as_factor()
+
+bldg_df$street_name <- str_remove(string = bldg_df$street.name, pattern = "^0+")
+
+bldg_df$street_name <- str_replace_all(string = bldg_df$street_name,
+                                       pattern = "Bay Shore",
+                                       replacement = "Bayshore")
+
+bldg_df$street_suffix <- str_replace_all(string = bldg_df$street.suffix,
+                                       pattern = "Bl",
+                                       replacement = "Blvd")
+
+bldg_df$street_suffix <- str_replace_all(string = bldg_df$street_suffix,
+                                       pattern = "Tr",
+                                       replacement = "Ter")
+
+bldg_df$changed_use <- bldg_df$existing.use != bldg_df$proposed.use
+bldg_df$estimated_revised_diff <- bldg_df$revised.cost - bldg_df$estimated.cost
+```
+
+### Date Types
+
+```{r}
+bldg_df$issued_date <- bldg_df$issued.date %>% mdy() %>% as_date()
+bldg_df$issued_year <- bldg_df$issued.date %>% year()
+bldg_df$issued_month <- bldg_df$issued.date %>% month(label = TRUE)
+bldg_df$completed_date <- bldg_df$completed.date %>% mdy() %>% as_date()
+bldg_df$completed_year <- bldg_df$completed.date %>% year()
+bldg_df$completed_month <- bldg_df$completed.date %>% month(label = TRUE)
+
+bldg_df$issued_completed_days <- bldg_df$completed_date - bldg_df$issued_date 
+bldg_df$issued_completed_years <- bldg_df$completed_year - bldg_df$issued_year 
+
+bldg_df$filed_date <- bldg_df$filed.date %>% mdy() %>% as_date()
+bldg_df$filed_issued_days <- bldg_df$issued_date - bldg_df$filed_date
+
+bldg_df$permit_expiration_date <- bldg_df$permit.expiration.date %>% mdy() %>% as_date()
+bldg_df$issued_expiration_days <- bldg_df$permit_expiration_date - bldg_df$issued_date
+```
+
+### Project Cost and Zoning 
+
+To look deeper into changes in zoning and type of constructions. We want to select only project that changed the building use. Also we will like to look at developments with significant capital investment in particular greater than half a million dollars 
+
+```{r}
+
+bldg_df <- bldg_df %>% arrange(desc(estimated.cost))
+bldg_df <- bldg_df[bldg_df$changed.use == TRUE,]
+bldg_df <- bldg_df %>% filter(revised.cost > 500000)
+
+bldg_df$zipcode <- as_factor(bldg_df$zipcode)
+bldg_df$permit_type <- as_factor(bldg_df$permit_type)
+bldg_df$neighborhoods_boundaries <- as_factor(bldg_df$neighborhoods_boundaries)
+bldg_df$proposed.use <- as_factor(bldg_df$proposed.use)
+
+head(bldg_df)
+```
+
+### Final dataset dimensions n (rows) x m (columns)
+
+```{r}
+
+dim_desc(bldg_df)
+
+```
+
+### Preparing the address string variable to match the OpenStreeMaps API
+
+```{r}
+# ADDRESS VARIABLE MUST MATH NOMINATIM API
+address <- paste0(bldg_df$street_number," ",
+                  bldg_df$street_name," ",
+                  bldg_df$street_suffix)
+
+address[1:5]
+
+# DATA CLEANING SPECIAL CASES (e.g. 3333-3339 N CLARK)
+query <- stri_replace(str = address, 
+                      replacement = "", 
+                      regex = "(-[0-9]+\\s)")
+
+# REPLACE SPACES (\\s) OR COMMAS (,) WITH + SIGN
+query <- str_replace_all(string = query, 
+                         pattern = "\\s|,", 
+                         replacement = "+")
+
+head(query)
+```
+
+## Data Collection: OpenStreeMaps API Request 
+
+```{r}
+df <- geocode(record_id = bldg_df$record.id,
+              address = query,
+              city = bldg_df$city, 
+              state = bldg_df$state,
+              zipcode = bldg_df$zipcode)
+```
+
+Create a main dataset with all the relevant information
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, copy=TRUE}
+
+bldg_df <- left_join(bldg_df, df, by="record_id")
+
+bldg_df$address <- str_replace_all(string = bldg_df$address,
+                                   pattern = "\\+",
+                                   replacement = " ")
+
+colremove <- c("street.number","street.name", 
+                "street.suffix", "current.status")
+
+bldg_df <- bldg_df %>% select(-one_of(colremove))
+
+head(bldg_df)
+
+```
+
+Finally lets save the new dataset containing the restaurants Geolocation (latitude, longitude).
+
+```{r}
+write_csv(bldg_df, "data/building_geocoord.csv")
